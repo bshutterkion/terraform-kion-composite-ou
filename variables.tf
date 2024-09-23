@@ -7,7 +7,7 @@ variable "ou_name" {
 
 variable "parent_ou_id" {
   description = "Organizational Unit ID where the OU will be a descendant."
-  type        = number
+  type        = string
 }
 
 variable "labels" {
@@ -81,7 +81,6 @@ variable "permission_scheme_id" {
   default     = 2
 }
 
-
 variable "cloud_access_roles" {
   description = "List of cloud access roles to create."
   type = list(object({
@@ -104,7 +103,7 @@ variable "cloud_rule_attachments" {
   description = "Attachments for the cloud rule."
   type = object({
     aws_iam_policies = optional(object({
-      user_managed   = optional(list(string))
+      user_managed   = optional(list(object({ template = string })), [])
       system_managed = optional(list(string))
     }))
     compliance_standard = object({
@@ -137,18 +136,19 @@ variable "cloud_rule_attachments" {
 }
 
 variable "cloud_rules" {
-  description = "List of cloud rules."
+  description = "List of cloud rules to create"
   type = list(object({
     name        = string
     description = optional(string)
     cloud_rule_attachments = optional(object({
-      scps = optional(list(string))
+      compliance_standards = optional(list(string))
+      scps                 = optional(list(string))
       aws_iam_policies = optional(object({
         user_managed   = optional(list(object({ template = string })), [])
-        system_managed = optional(list(string), [])
+        system_managed = optional(list(string))
       }))
+      cloudformation_templates = optional(list(string))
     }))
-    compliance_standards = optional(list(string))
   }))
   default = []
 }
@@ -253,4 +253,34 @@ variable "severity_type_id" {
   description = "The severity type ID."
   type        = number
   default     = 3
+}
+
+variable "remove_extensions" {
+  type    = list(string)
+  default = [".tpl", ".json", ".yaml", ".yml"]
+}
+
+variable "system_managed_policies" {
+  description = "List of system managed policies"
+  type = list(object({
+    id                    = number
+    name                  = string
+    system_managed_policy = bool
+  }))
+}
+
+variable "cloudformation_templates" {
+  description = "List of CloudFormation templates to create"
+  type = list(object({
+    name                   = string
+    regions                = optional(list(string), ["*"])
+    description            = optional(string)
+    policy_template        = string
+    region                 = optional(string)
+    sns_arns               = optional(string)
+    template_parameters    = optional(string)
+    termination_protection = optional(bool, false)
+    tags                   = optional(map(string), {})
+  }))
+  default = []
 }

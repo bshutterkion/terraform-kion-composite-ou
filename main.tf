@@ -68,17 +68,12 @@ module "compliance_standards" {
 }
 
 module "iam_policies" {
-  source = "/Users/bshutter/Dev/code/kion/bshutter/github/bshutterkion/kion-modules/aws-iam-policy"
-
-  for_each = {
-    for policy in local.all_policies :
-    policy.key => policy
-    if policy.type == "user_managed"
-  }
+  source   = "/Users/bshutter/Dev/code/kion/bshutter/github/bshutterkion/kion-modules/aws-iam-policy"
+  for_each = { for policy in local.all_policies : policy.key => policy if policy.type == "user_managed" }
 
   name = coalesce(
     compact([
-      for ext in local.remove_extensions : (
+      for ext in var.remove_extensions : (
         endswith(each.value.name, ext)
         ? substr(each.value.name, 0, length(each.value.name) - length(ext))
         : null
@@ -87,10 +82,11 @@ module "iam_policies" {
     each.value.name
   )
 
-  policy_template   = each.value.policy_template
-  owner_users       = [for id in var.owner_users : { id = id }]
-  owner_user_groups = [for id in var.owner_user_groups : { id = id }]
-  policy_type       = each.value.type
+  policy_template         = each.value.policy_template
+  owner_users             = [for id in var.owner_users : { id = id }]
+  owner_user_groups       = [for id in var.owner_user_groups : { id = id }]
+  policy_type             = each.value.type
+  system_managed_policies = var.system_managed_policies
 }
 
 module "scps" {
@@ -113,6 +109,24 @@ module "scps" {
   ou_name             = var.ou_name
 }
 
+module "cloudformation_templates" {
+  source   = "/Users/bshutter/Dev/code/kion/bshutter/github/bshutterkion/kion-modules/aws-cloudformation-template"
+  for_each = local.cloudformation_template_map
+
+  name                   = each.value.name
+  regions                = try(each.value.regions, ["*"]) // Default to all regions if not specified
+  owner_users            = [for id in var.owner_users : { id = id }]
+  owner_user_groups      = [for id in var.owner_user_groups : { id = id }]
+  description            = each.value.description
+  policy                 = each.value.policy
+  policy_template        = each.value.policy_template
+  region                 = try(each.value.region, null)
+  sns_arns               = try(each.value.sns_arns, null)
+  template_parameters    = try(each.value.template_parameters, null)
+  termination_protection = try(each.value.termination_protection, false)
+  tags                   = try(each.value.tags, {})
+}
+
 module "cloud_rules" {
   source = "/Users/bshutter/Dev/code/kion/bshutter/github/bshutterkion/kion-modules/cloud-rule"
 
@@ -124,14 +138,14 @@ module "cloud_rules" {
   ous               = [{ id = module.ou.ou_id }]
 
   service_control_policies = [
-    for scp in each.value.cloud_rule_attachments.scps : { id = module.scps[each.key].scp_id }
+    for scp in try(each.value.cloud_rule_attachments.scps, []) : { id = module.scps[each.key].scp_id }
   ]
 
   aws_iam_policies = flatten([
     # Process user-managed policies
     [
       for policy in try(each.value.cloud_rule_attachments.aws_iam_policies.user_managed, []) : {
-        id = local.policy_id_map[replace(basename(policy.template), "\\.(tpl|json|ya?ml)$", "")]
+        id = module.iam_policies[replace(basename(policy.template), "\\.(tpl|json|ya?ml)$", "")].policy_id
       }
     ],
     # Process system-managed policies
@@ -142,7 +156,20 @@ module "cloud_rules" {
     ]
   ])
 
-  depends_on = [module.compliance_standards, module.ou, module.scps, module.iam_policies]
+  compliance_standards = [
+    for cs in coalesce(try(each.value.cloud_rule_attachments.compliance_standards, []), []) : {
+      id = module.compliance_standards[cs].compliance_standard_id
+    }
+  ]
+
+  aws_cloudformation_templates = [
+    for cft in try(each.value.cloud_rule_attachments.cloudformation_templates, []) : {
+      id = try(local.cloudformation_template_id_map[cft], null)
+    }
+    if can(local.cloudformation_template_id_map[cft])
+  ]
+
+  depends_on = [module.compliance_standards, module.ou, module.scps, module.iam_policies, module.cloudformation_templates]
 }
 
 
@@ -153,9 +180,9 @@ module "ou_cars" {
   name                   = each.value.name
   ou_id                  = module.ou.ou_id
   aws_iam_role_name      = each.value.aws_iam_role_name
-  web_access             = each.value.web_access
-  short_term_access_keys = each.value.short_term_access_keys
-  long_term_access_keys  = each.value.long_term_access_keys
+  web_access             = try(each.value.web_access, true)
+  short_term_access_keys = try(each.value.short_term_access_keys, true)
+  long_term_access_keys  = try(each.value.long_term_access_keys, false)
 
   aws_iam_policies = [
     for policy in local.car_policies :
@@ -167,6 +194,7 @@ module "ou_cars" {
     [for group_name in each.value.user_groups : { id = try(local.user_group_name_to_id[group_name], null) }],
     [for id in var.owner_user_groups : { id = id }]
   ))
+
   users      = [for user_id in each.value.users : { id = user_id }]
   depends_on = [module.ou, module.iam_policies, module.user_groups]
 }

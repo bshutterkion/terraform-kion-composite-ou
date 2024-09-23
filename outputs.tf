@@ -29,5 +29,5 @@ output "ou_car_ids" {
 
 output "iam_policy_ids" {
   description = "IDs of the created IAM policies."
-  value       = { for k, v in module.iam_policies : k => v.aws_iam_policy_id }
+  value       = { for k, v in module.iam_policies : k => v.policy_ids[0] }
 }

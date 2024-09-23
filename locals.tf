@@ -60,14 +60,17 @@ locals {
     {
       for policy in local.all_policies : policy.key =>
       policy.type == "user_managed"
-      ? module.iam_policies[policy.key].aws_iam_policy_id
-      : data.kion_aws_iam_policy.system_managed[policy.key].list[0].id
+      ? module.iam_policies[policy.key].policy_id
+      : null # This should never happen for all_policies, but we'll keep it as a safeguard
     },
     {
       for policy in local.car_policies : policy.key =>
       policy.type == "system_managed"
-      ? data.kion_aws_iam_policy.system_managed[policy.key].list[0].id
-      : module.iam_policies[policy.key].aws_iam_policy_id
+      ? try(
+        [for p in var.system_managed_policies : p.id if p.name == policy.name][0],
+        null # Return null if no matching policy is found
+      )
+      : module.iam_policies[policy.key].policy_id
     }
   )
 
@@ -139,7 +142,8 @@ locals {
   has_compliance_checks = length(local.all_checks) > 0
 
   # Process compliance standards and checks
-  compliance_data = flatten([
+  compliance_data = concat(
+    # Process compliance standards defined at the OU level
     can(var.compliance_standards) ? [
       for cs in var.compliance_standards : {
         name        = cs.name
@@ -151,7 +155,7 @@ locals {
               template                 = check.template
               overrides                = check.overrides
               is_system_check          = false
-              compliance_standard_name = "${var.ou_name} ${cs.name}"
+              compliance_standard_name = "${cs.name}"
               key                      = "${cs.name}-${replace(replace(basename(check.template), ".tpl", ""), "[^a-zA-Z0-9]", "")}"
             }
           ] : [],
@@ -161,14 +165,32 @@ locals {
               template                 = check.template
               overrides                = try(check.overrides, {})
               is_system_check          = true
-              compliance_standard_name = "${var.ou_name} ${cs.name}"
+              compliance_standard_name = "${cs.name}"
               key                      = "${cs.name}-${replace(replace(check.template, " ", ""), "[^a-zA-Z0-9]", "")}"
             }
           ] : []
         ])
       }
-    ] : []
-  ])
+    ] : [],
+    # Process compliance standards attached to cloud rules
+    flatten([
+      for cr in var.cloud_rules :
+      try(
+        [
+          for cs_name in coalesce(try(cr.cloud_rule_attachments.compliance_standards, []), []) : {
+            name   = cs_name
+            checks = [] # No checks defined at this level
+          }
+        ],
+        []
+      )
+    ])
+  )
+
+  # Deduplicate compliance standards
+  unique_compliance_standards = {
+    for cs in local.compliance_data : cs.name => cs...
+  }
 
   # Flatten all compliance checks
   compliance_checks = flatten([
@@ -179,9 +201,9 @@ locals {
   compliance_standards = {
     for standard in local.compliance_data :
     standard.name => {
-      name        = "${var.ou_name} -${standard.name}"
-      description = standard.description
-      checks      = standard.checks
+      name        = "${standard.name}"
+      description = try(standard.description, null)
+      checks      = try(standard.checks, [])
     }
   }
 
@@ -211,6 +233,17 @@ locals {
     ])
   }
 
+  # Create a map for CloudFormation templates
+  cloudformation_template_map = {
+    for cft in try(var.cloudformation_templates, []) :
+    cft.name => cft
+  }
+
+  # Create an ID map for CloudFormation templates
+  cloudformation_template_id_map = {
+    for name, cft in module.cloudformation_templates :
+    name => cft.cloudformation_template_id
+  }
 
   remove_extensions = [".tpl", ".json", ".yaml", ".yml"]
 }
